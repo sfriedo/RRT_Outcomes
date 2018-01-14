@@ -1,5 +1,6 @@
 from hanaconnection import HanaConnection
 from sklearn.naive_bayes import MultinomialNB
+from sklearn.neural_network import MLPClassifier
 from sklearn import preprocessing
 from sklearn.model_selection import cross_val_score
 from sklearn.metrics import confusion_matrix
@@ -94,12 +95,19 @@ def main():
     df = get_data()
     df, target = process_data(df)
     print(df)
+
     gnb = MultinomialNB()
     scores = cross_val_score(gnb, df, target, cv=5)
     print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
     y_pred = gnb.fit(df, target).predict(df)
     eval_model(target, y_pred)
 
+    clf = MLPClassifier(solver='lbfgs', alpha=1e-5,
+                        hidden_layer_sizes=(5, 2), random_state=1)
+    scores = cross_val_score(clf, df, target, cv=5)
+    print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
+    y_pred = clf.fit(df, target).predict(df)
+    eval_model(target, y_pred)
 
 if __name__ == '__main__':
     main()
