@@ -2,7 +2,10 @@ from hanaconnection import HanaConnection
 from sklearn.naive_bayes import MultinomialNB
 from sklearn import preprocessing
 from sklearn.model_selection import cross_val_score
+from sklearn.metrics import confusion_matrix
 import pandas as pd
+import numpy as np
+from knnimpute import knn_impute_few_observed
 
 
 ATTRIBUTES = ['GENDER', 'ETHNICITY', 'AGE', 'HEIGHT', 'WEIGHT', 'BMI',
@@ -71,8 +74,8 @@ def process_data(df):
         le.fit(df[column])
         df[column] = le.transform(df[column])
     # Impute missing values
-    imp = preprocessing.Imputer()
-    df[:] = imp.fit_transform(df)
+    df[:] = knn_impute_few_observed(df.as_matrix(),
+                                    np.isnan(df.as_matrix()), k=3)
     # Normalize values to [0, 1]
     df[:] = preprocessing.MinMaxScaler().fit_transform(df)
     return df, target
@@ -85,6 +88,8 @@ def main():
     gnb = MultinomialNB()
     scores = cross_val_score(gnb, df, target, cv=5)
     print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
+    y_pred = gnb.fit(df, target).predict(df)
+    print('Confusion matrix: ', confusion_matrix(target, y_pred))
 
 
 if __name__ == '__main__':

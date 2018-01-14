@@ -1,3 +1,4 @@
 pyhdb==0.3.3
 pandas==0.22.0
 scikit-learn==0.19.1
+knnimpute
