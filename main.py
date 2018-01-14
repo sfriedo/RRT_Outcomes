@@ -62,9 +62,11 @@ def get_data():
 
 
 def process_data(df):
+    print('Preparing data.')
     # Extract target attribute
     target = df[TARGET_ATTRIBUTE]
     df = df.drop(TARGET_ATTRIBUTE, axis=1)
+    print('Encoding attributes.')
     le = preprocessing.LabelEncoder()
     numeric_cols = list(set(ATTRIBUTES) - set(STRING_ATRRIBUTES) -
                         set(BOOL_ATTRIBUTES))
@@ -75,9 +77,11 @@ def process_data(df):
         le.fit(df[column])
         df[column] = le.transform(df[column])
     # Impute missing values
+    print('Imputing missing data.')
     df[:] = knn_impute_few_observed(df.as_matrix(),
                                     np.isnan(df.as_matrix()), k=3)
     # Normalize values to [0, 1]
+    print('Scaling data.')
     df[:] = preprocessing.MinMaxScaler().fit_transform(df)
     return df, target
 
@@ -96,13 +100,16 @@ def main():
     df, target = process_data(df)
     print(df)
 
+    print('Training bayes.')
     gnb = MultinomialNB()
     scores = cross_val_score(gnb, df, target, cv=5)
     print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
     y_pred = gnb.fit(df, target).predict(df)
     eval_model(target, y_pred)
 
-    clf = MLPClassifier(solver='lbfgs', alpha=1e-5,
+    print('Training neural network.')
+    clf = MLPClassifier(activation='relu',
+                        solver='adam', alpha=1e-5,
                         hidden_layer_sizes=(5, 2), random_state=1)
     scores = cross_val_score(clf, df, target, cv=5)
     print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
