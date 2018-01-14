@@ -81,6 +81,15 @@ def process_data(df):
     return df, target
 
 
+def eval_model(actual, pred):
+    conf_matrix = confusion_matrix(actual, pred)
+    (tn, fp), (fn, tp) = conf_matrix
+    print('Confusion matrix: ', conf_matrix)
+    print('Recall (Sensitivity): ', tp / (tp + fn))
+    print('Specificity: ', tn / (tn + fp))
+    print('Precision: ', tp / (tp + fp))
+
+
 def main():
     df = get_data()
     df, target = process_data(df)
@@ -89,7 +98,7 @@ def main():
     scores = cross_val_score(gnb, df, target, cv=5)
     print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
     y_pred = gnb.fit(df, target).predict(df)
-    print('Confusion matrix: ', confusion_matrix(target, y_pred))
+    eval_model(target, y_pred)
 
 
 if __name__ == '__main__':
