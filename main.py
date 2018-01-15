@@ -2,7 +2,8 @@ from hanaconnection import HanaConnection
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.neural_network import MLPClassifier
 from sklearn import preprocessing
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import cross_val_score, train_test_split, \
+    GridSearchCV
 from sklearn.metrics import confusion_matrix
 import pandas as pd
 import numpy as np
@@ -95,26 +96,36 @@ def eval_model(actual, pred):
     print('Precision: ', tp / (tp + fp))
 
 
+def get_gridsearch_nn():
+    tuned_parameters = [{'activation': ['relu', 'identity', 'logistic'],
+                         'alpha': [1e-3, 1e-4, 1e-5],
+                         'solver': ['adam', 'sgd']}]
+    return GridSearchCV(MLPClassifier(), tuned_parameters, cv=5)
+
+
 def main():
     df = get_data()
     df, target = process_data(df)
     print(df)
+    X_train, X_test, y_train, y_test = train_test_split(
+        df, target, test_size=0.3)
 
     print('Training bayes.')
     gnb = MultinomialNB()
     scores = cross_val_score(gnb, df, target, cv=5)
     print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-    y_pred = gnb.fit(df, target).predict(df)
-    eval_model(target, y_pred)
+    y_pred = gnb.fit(X_train, y_train).predict(X_test)
+    eval_model(y_test, y_pred)
 
     print('Training neural network.')
-    clf = MLPClassifier(activation='relu',
-                        solver='adam', alpha=1e-5,
-                        hidden_layer_sizes=(5, 2), random_state=1)
+    clf = get_gridsearch_nn()
+    # MLPClassifier(activation='relu',
+    #                     solver='adam', alpha=1e-5,
+    #                     hidden_layer_sizes=(5, 2), random_state=1)
     scores = cross_val_score(clf, df, target, cv=5)
     print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-    y_pred = clf.fit(df, target).predict(df)
-    eval_model(target, y_pred)
+    y_pred = clf.fit(X_train, y_train).predict(X_test)
+    eval_model(y_test, y_pred)
 
 if __name__ == '__main__':
     main()
