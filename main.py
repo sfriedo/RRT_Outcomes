@@ -47,9 +47,9 @@ BOOL_ATTRIBUTES = ['DIED_90DAYS', 'ELIXHAUSER_VANWALRAVEN',
                    'FLUID_ELECTROLYTE', 'BLOOD_LOSS_ANEMIA',
                    'DEFICIENCY_ANEMIAS', 'ALCOHOL_ABUSE', 'DRUG_ABUSE',
                    'PSYCHOSES', 'DEPRESSION']
-TARGET_ATTRIBUTE = 'LENGTH_OF_STAY_HOURS'
+TARGET_ATTRIBUTE = 'DIED_90DAYS'
 # One of nominal/continuous
-TARGET_TYPE = 'continuous'
+TARGET_TYPE = 'nominal'
 
 
 def get_data():
@@ -105,6 +105,15 @@ def eval_reg_model(actual, pred):
     print('Mean Absolute Error: ', mean_absolute_error(actual, pred))
 
 
+def most_informative_feature_for_binary_classification(feature_names,
+                                                       classifier, n=10):
+    class_labels = classifier.classes_
+    topn_class1 = sorted(zip(classifier.coef_[0], feature_names))[:n]
+
+    for coef, feat in topn_class1:
+        print(class_labels[0], coef, feat)
+
+
 def main():
     df = get_data()
     df, target = process_data(df)
@@ -119,6 +128,7 @@ def main():
         print('Accuracy: %0.2f (+/- %0.2f)' % (scores.mean(),
               scores.std() * 2))
         y_pred = bayes.fit(X_train, y_train).predict(X_test)
+        most_informative_feature_for_binary_classification(df.columns, bayes)
         eval_clf_model(y_test, y_pred)
 
         print('Training neural network.')
