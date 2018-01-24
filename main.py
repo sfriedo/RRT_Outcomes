@@ -1,7 +1,7 @@
+#!python2
+from __future__ import division
 from hanaconnection import HanaConnection
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.linear_model import BayesianRidge
-from sklearn.neural_network import MLPClassifier, MLPRegressor
+from sklearn.neural_network import MLPClassifier
 from sklearn import preprocessing
 from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.metrics import confusion_matrix, explained_variance_score, \
@@ -9,8 +9,11 @@ from sklearn.metrics import confusion_matrix, explained_variance_score, \
 import pandas as pd
 import numpy as np
 from knnimpute import knn_impute_few_observed
+import sys
+sys.path.append('../sklearn-expertsys-master')
+from RuleListClassifier import RuleListClassifier
 
-
+DATA_TABLE = '"MIMICIII"."M_RRT_DATA_VITALS"'
 ATTRIBUTES = ['GENDER', 'ETHNICITY', 'AGE', 'HEIGHT', 'WEIGHT', 'BMI',
               'DIED_90DAYS', 'LENGTH_OF_STAY_HOURS', 'DOSAGE', 'VENT_BEFORE',
               'VENT_AFTER', 'AKIN', 'ELIXHAUSER_VANWALRAVEN',
@@ -47,14 +50,12 @@ BOOL_ATTRIBUTES = ['DIED_90DAYS', 'ELIXHAUSER_VANWALRAVEN',
                    'FLUID_ELECTROLYTE', 'BLOOD_LOSS_ANEMIA',
                    'DEFICIENCY_ANEMIAS', 'ALCOHOL_ABUSE', 'DRUG_ABUSE',
                    'PSYCHOSES', 'DEPRESSION']
-TARGET_ATTRIBUTE = 'DIED_90DAYS'
-# One of nominal/continuous
-TARGET_TYPE = 'nominal'
+TARGET_ATTRIBUTES = ['DIED_90DAYS', 'STAY_DAYS', 'VENT_FREE_DAYS']
 
 
 def get_data():
-    query = '''SELECT {} FROM "MIMICIII"."M_RRT_DATA_VITALS" '''.format(
-        ', '.join(ATTRIBUTES))
+    query = '''SELECT {} FROM {} '''.format(
+        ', '.join(ATTRIBUTES), DATA_TABLE)
     result = None
     with HanaConnection() as conn:
         try:
@@ -66,7 +67,7 @@ def get_data():
     return result
 
 
-def process_data(df):
+def process_data(df, target, scale=True):
     print('Preparing data.')
     # Extract target attribute
     print('Encoding attributes.')
@@ -83,16 +84,17 @@ def process_data(df):
     df[:] = knn_impute_few_observed(df.as_matrix(),
                                     np.isnan(df.as_matrix()), k=3)
     # Normalize values to [0, 1]
-    target = df[TARGET_ATTRIBUTE]
-    df = df.drop(TARGET_ATTRIBUTE, axis=1)
-    print('Scaling data.')
-    df[:] = preprocessing.MinMaxScaler().fit_transform(df)
+    target = df[target]
+    df = df.drop(target, axis=1)
+    if scale:
+        print('Scaling data.')
+        df[:] = preprocessing.MinMaxScaler().fit_transform(df)
     return df, target
 
 
 def eval_clf_model(actual, pred):
-    conf_matrix = confusion_matrix(actual, pred)
-    (tn, fp), (fn, tp) = conf_matrix
+    conf_matrix = confusion_matrix(actual, pred).ravel()
+    tn, fp, fn, tp = conf_matrix
     print('Confusion matrix: ', conf_matrix)
     print('Recall (Sensitivity): ', tp / (tp + fn))
     print('Specificity: ', tn / (tn + fp))
@@ -116,19 +118,22 @@ def most_informative_feature_for_binary_classification(feature_names,
 
 def main():
     df = get_data()
-    df, target = process_data(df)
-    print(df)
-    X_train, X_test, y_train, y_test = train_test_split(
-        df, target, test_size=0.3)
 
-    if TARGET_TYPE == 'nominal':
-        print('Training bayes.')
-        bayes = MultinomialNB()
-        scores = cross_val_score(bayes, df, target, cv=5)
+    for target in TARGET_ATTRIBUTES:
+        df, target = process_data(df, target)
+        X_train, X_test, y_train, y_test = train_test_split(
+            df, target, test_size=0.3)
+
+        print('Training bayesian rule lists.')
+        brl = RuleListClassifier(max_iter=10000, class1label=target,
+                                 verbose=False)
+        scores = cross_val_score(brl, df.as_matrix(), target.as_matrix(), cv=5)
         print('Accuracy: %0.2f (+/- %0.2f)' % (scores.mean(),
               scores.std() * 2))
-        y_pred = bayes.fit(X_train, y_train).predict(X_test)
-        most_informative_feature_for_binary_classification(df.columns, bayes)
+        y_pred = brl.fit(X_train.as_matrix(), y_train.as_matrix(),
+                         feature_labels=df.columns) \
+            .predict(X_test)
+        print(brl)
         eval_clf_model(y_test, y_pred)
 
         print('Training neural network.')
@@ -140,22 +145,11 @@ def main():
               scores.std() * 2))
         y_pred = clf.fit(X_train, y_train).predict(X_test)
         eval_clf_model(y_test, y_pred)
-    else:
-        print('Training bayes.')
-        bayes = BayesianRidge()
-        scores = cross_val_score(bayes, df, target, cv=5)
-        print('Accuracy: %0.2f (+/- %0.2f)' % (scores.mean(),
-              scores.std() * 2))
-        y_pred = bayes.fit(X_train, y_train).predict(X_test)
-        eval_reg_model(y_test, y_pred)
 
-        print('Training neural network.')
-        reg = MLPRegressor()
-        scores = cross_val_score(reg, df, target, cv=5)
-        print('Accuracy: %0.2f (+/- %0.2f)' % (scores.mean(),
-              scores.std() * 2))
-        y_pred = reg.fit(X_train, y_train).predict(X_test)
-        eval_reg_model(y_test, y_pred)
+        print('Training bayesian rule lists as mimic model.')
+        y_train = [x[1] for x in clf.predict_proba(X_train)]
+        y_pred = brl.fit(X_train, y_train).predict(X_test)
+        eval_clf_model(y_test, y_pred)
 
 if __name__ == '__main__':
     main()
