@@ -3,9 +3,8 @@ from __future__ import division
 from hanaconnection import HanaConnection
 from sklearn.neural_network import MLPClassifier
 from sklearn import preprocessing
-from sklearn.model_selection import cross_val_score, train_test_split
-from sklearn.metrics import confusion_matrix, explained_variance_score, \
-    mean_squared_error, mean_absolute_error
+from sklearn.model_selection import cross_val_predict
+from sklearn.metrics import confusion_matrix, accuracy_score
 import pandas as pd
 import numpy as np
 from knnimpute import knn_impute_few_observed
@@ -13,7 +12,7 @@ import sys
 sys.path.append('../sklearn-expertsys-master')
 from RuleListClassifier import RuleListClassifier
 
-DATA_TABLE = '"MIMICIII"."M_RRT_DATA_VITALS"'
+DATA_TABLE = '"MIMICIII"."RRT_ADDITIONAL_OUTCOMES"'
 ATTRIBUTES = ['GENDER', 'ETHNICITY', 'AGE', 'HEIGHT', 'WEIGHT', 'BMI',
               'DIED_90DAYS', 'LENGTH_OF_STAY_HOURS', 'DOSAGE', 'VENT_BEFORE',
               'VENT_AFTER', 'AKIN', 'ELIXHAUSER_VANWALRAVEN',
@@ -35,7 +34,7 @@ ATTRIBUTES = ['GENDER', 'ETHNICITY', 'AGE', 'HEIGHT', 'WEIGHT', 'BMI',
               'GFR_24_B', 'CR_48_B', 'GFR_48_B', 'CR_72_B', 'GFR_72_B',
               'CR_24_A', 'GFR_24_A', 'CR_48_A', 'GFR_48_A', 'CR_72_A',
               'GFR_72_A', 'HEARTRATE', 'SYSBP', 'DIASBP', 'MEANBP', 'RESPRATE',
-              'TEMPC', 'SPO2']
+              'TEMPC', 'SPO2', 'STAY_DAYS', 'VENT_FREE_DAYS']
 STRING_ATRRIBUTES = ['GENDER', 'ETHNICITY', 'AKIN']
 BOOL_ATTRIBUTES = ['DIED_90DAYS', 'ELIXHAUSER_VANWALRAVEN',
                    'CONGESTIVE_HEART_FAILURE', 'CARDIAC_ARRHYTHMIAS',
@@ -67,9 +66,9 @@ def get_data():
     return result
 
 
-def process_data(df, target, scale=True):
+def process_data(df, target_name, scale=True):
     print('Preparing data.')
-    # Extract target attribute
+    # Extract target_name attribute
     print('Encoding attributes.')
     le = preprocessing.LabelEncoder()
     numeric_cols = list(set(ATTRIBUTES) - set(STRING_ATRRIBUTES))
@@ -84,8 +83,9 @@ def process_data(df, target, scale=True):
     df[:] = knn_impute_few_observed(df.as_matrix(),
                                     np.isnan(df.as_matrix()), k=3)
     # Normalize values to [0, 1]
-    target = df[target]
-    df = df.drop(target, axis=1)
+    target_name = target_name.encode("utf-8")
+    target = df[target_name]
+    df = df.drop(target_name, axis=1)
     if scale:
         print('Scaling data.')
         df[:] = preprocessing.MinMaxScaler().fit_transform(df)
@@ -101,12 +101,6 @@ def eval_clf_model(actual, pred):
     print('Precision: ', tp / (tp + fp))
 
 
-def eval_reg_model(actual, pred):
-    print('Explained Variance (R2): ', explained_variance_score(actual, pred))
-    print('Mean Squared Error: ', mean_squared_error(actual, pred))
-    print('Mean Absolute Error: ', mean_absolute_error(actual, pred))
-
-
 def most_informative_feature_for_binary_classification(feature_names,
                                                        classifier, n=10):
     class_labels = classifier.classes_
@@ -117,39 +111,43 @@ def most_informative_feature_for_binary_classification(feature_names,
 
 
 def main():
-    df = get_data()
+    df_ori = get_data()
 
-    for target in TARGET_ATTRIBUTES:
-        df, target = process_data(df, target)
-        X_train, X_test, y_train, y_test = train_test_split(
-            df, target, test_size=0.3)
+    for target_name in TARGET_ATTRIBUTES:
+        print('Training for {}'.format(target_name))
+        df, target = process_data(df_ori, target_name, False)
 
         print('Training bayesian rule lists.')
-        brl = RuleListClassifier(max_iter=10000, class1label=target,
+        brl = RuleListClassifier(class1label=target_name,
                                  verbose=False)
-        scores = cross_val_score(brl, df.as_matrix(), target.as_matrix(), cv=5)
-        print('Accuracy: %0.2f (+/- %0.2f)' % (scores.mean(),
-              scores.std() * 2))
-        y_pred = brl.fit(X_train.as_matrix(), y_train.as_matrix(),
-                         feature_labels=df.columns) \
-            .predict(X_test)
+        y_pred = cross_val_predict(brl, df.as_matrix(), target.as_matrix(),
+                                   cv=5)
+        print('Accuracy: {}'.format(accuracy_score(target, y_pred)))
+        eval_clf_model(target, y_pred)
+        brl.fit(df.as_matrix(), target.as_matrix(),
+                feature_labels=df.columns)
         print(brl)
-        eval_clf_model(y_test, y_pred)
 
         print('Training neural network.')
+        df, target = process_data(df_ori, target_name, True)
         clf = MLPClassifier(activation='relu',
                             solver='adam', alpha=1e-5,
                             hidden_layer_sizes=(5, 2), random_state=1)
-        scores = cross_val_score(clf, df, target, cv=5)
-        print('Accuracy: %0.2f (+/- %0.2f)' % (scores.mean(),
-              scores.std() * 2))
-        y_pred = clf.fit(X_train, y_train).predict(X_test)
-        eval_clf_model(y_test, y_pred)
+        y_pred = cross_val_predict(clf, df, target, cv=5)
+        print('Accuracy: {}'.format(accuracy_score(target, y_pred)))
+        eval_clf_model(target, y_pred)
 
         print('Training bayesian rule lists as mimic model.')
-        y_train = [x[1] for x in clf.predict_proba(X_train)]
-        y_pred = brl.fit(X_train, y_train).predict(X_test)
-        eval_clf_model(y_test, y_pred)
+        brl = RuleListClassifier(class1label=target_name,
+                                 verbose=False)
+        y_train = [x[1] for x in clf.predict_proba(df)]
+        y_pred = cross_val_predict(brl, df.as_matrix(), y_train, cv=5)
+        print(brl)
+        eval_clf_model(target, y_pred)
+        brl.fit(df.as_matrix(), y_train,
+                feature_labels=df.columns)
+        print(brl)
+
 
 if __name__ == '__main__':
     main()
