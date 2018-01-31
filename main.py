@@ -2,20 +2,24 @@
 from __future__ import division
 from hanaconnection import HanaConnection
 from sklearn.neural_network import MLPClassifier
+from sklearn.linear_model import BayesianRidge
 from sklearn import preprocessing
-from sklearn.model_selection import cross_val_predict
-from sklearn.metrics import confusion_matrix, accuracy_score
+from sklearn.model_selection import cross_val_predict, train_test_split
+from sklearn.metrics import confusion_matrix, accuracy_score, roc_curve, auc, \
+    explained_variance_score, mean_squared_error, mean_absolute_error
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 from knnimpute import knn_impute_few_observed
+from os import makedirs
+from os.path import exists
 import sys
 sys.path.append('../sklearn-expertsys-master')
 from RuleListClassifier import RuleListClassifier
 
 DATA_TABLE = '"MIMICIII"."RRT_ADDITIONAL_OUTCOMES"'
 ATTRIBUTES = ['GENDER', 'ETHNICITY', 'AGE', 'HEIGHT', 'WEIGHT', 'BMI',
-              'DIED_90DAYS', 'LENGTH_OF_STAY_HOURS', 'DOSAGE', 'VENT_BEFORE',
-              'VENT_AFTER', 'AKIN', 'ELIXHAUSER_VANWALRAVEN',
+              'DIED_90DAYS', 'DOSAGE', 'AKIN', 'ELIXHAUSER_VANWALRAVEN',
               'CONGESTIVE_HEART_FAILURE', 'CARDIAC_ARRHYTHMIAS',
               'VALVULAR_DISEASE', 'PULMONARY_CIRCULATION',
               'PERIPHERAL_VASCULAR',
@@ -49,7 +53,9 @@ BOOL_ATTRIBUTES = ['DIED_90DAYS', 'ELIXHAUSER_VANWALRAVEN',
                    'FLUID_ELECTROLYTE', 'BLOOD_LOSS_ANEMIA',
                    'DEFICIENCY_ANEMIAS', 'ALCOHOL_ABUSE', 'DRUG_ABUSE',
                    'PSYCHOSES', 'DEPRESSION']
-TARGET_ATTRIBUTES = ['DIED_90DAYS', 'STAY_DAYS', 'VENT_FREE_DAYS']
+TARGET_ATTRIBUTES = ['DIED_90DAYS', 'STAY_DAYS_LESS_SEVEN',
+                     'VENT_DAYS_LESS_SEVEN']
+PLOT_DIR = 'results/'
 
 
 def get_data():
@@ -78,6 +84,10 @@ def process_data(df, target_name, scale=True):
         df[column] = df[column].fillna('null')
         le.fit(df[column])
         df[column] = le.transform(df[column])
+    df['STAY_DAYS_LESS_SEVEN'] = np.where(df['STAY_DAYS'] < 7, 1, 0)
+    df = df.drop('STAY_DAYS', axis=1)
+    df['VENT_DAYS_LESS_SEVEN'] = np.where(df['VENT_FREE_DAYS'] < 7, 1, 0)
+    df = df.drop('VENT_FREE_DAYS', axis=1)
     # Impute missing values
     print('Imputing missing data.')
     df[:] = knn_impute_few_observed(df.as_matrix(),
@@ -85,7 +95,8 @@ def process_data(df, target_name, scale=True):
     # Normalize values to [0, 1]
     target_name = target_name.encode("utf-8")
     target = df[target_name]
-    df = df.drop(target_name, axis=1)
+    for t in TARGET_ATTRIBUTES:
+        df = df.drop(t, axis=1)
     if scale:
         print('Scaling data.')
         df[:] = preprocessing.MinMaxScaler().fit_transform(df)
@@ -101,6 +112,12 @@ def eval_clf_model(actual, pred):
     print('Precision: ', tp / (tp + fp))
 
 
+def eval_reg_model(actual, pred):
+    print('Explained Variance (R2): ', explained_variance_score(actual, pred))
+    print('Mean Squared Error: ', mean_squared_error(actual, pred))
+    print('Mean Absolute Error: ', mean_absolute_error(actual, pred))
+
+
 def most_informative_feature_for_binary_classification(feature_names,
                                                        classifier, n=10):
     class_labels = classifier.classes_
@@ -110,26 +127,48 @@ def most_informative_feature_for_binary_classification(feature_names,
         print(class_labels[0], coef, feat)
 
 
+def plot_roc(y_test, y_score, target_name, clf_name):
+    fpr, tpr, _ = roc_curve(y_test, y_score)
+    roc_auc = auc(fpr, tpr)
+
+    plt.figure()
+    plt.plot(fpr, tpr, color='darkorange', label='ROC curve (area = {:.2f})'
+             .format(roc_auc))
+    plt.plot([0, 1], [0, 1], color='navy', linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC curve for MLPClassifier predicting STAY_DAYS_LESS_SEVEN')
+    plt.legend(loc='lower right')
+    if not exists(PLOT_DIR):
+        makedirs(PLOT_DIR)
+    plt.savefig(PLOT_DIR + 'ROC_{}_{}'.format(target_name, clf_name))
+    plt.clf()
+
+
 def main():
     df_ori = get_data()
 
     for target_name in TARGET_ATTRIBUTES:
         print('Training for {}'.format(target_name))
-        df, target = process_data(df_ori, target_name, False)
 
-        print('Training bayesian rule lists.')
-        brl = RuleListClassifier(class1label=target_name,
-                                 verbose=False)
-        y_pred = cross_val_predict(brl, df.as_matrix(), target.as_matrix(),
-                                   cv=5)
-        print('Accuracy: {}'.format(accuracy_score(target, y_pred)))
-        eval_clf_model(target, y_pred)
-        brl.fit(df.as_matrix(), target.as_matrix(),
-                feature_labels=df.columns)
-        print(brl)
+        # df, target = process_data(df_ori, target_name, False)
+        # print('Training bayesian rule lists.')
+        # brl = RuleListClassifier(class1label=target_name,
+        #                          verbose=False)
+        # y_pred = cross_val_predict(brl, df.as_matrix(), target.as_matrix(),
+        #                            cv=5)
+        # print('Accuracy: {}'.format(accuracy_score(target, y_pred)))
+        # eval_clf_model(target, y_pred)
+        # brl.fit(df.as_matrix(), target.as_matrix(),
+        #         feature_labels=df.columns)
+        # print(brl)
 
         print('Training neural network.')
         df, target = process_data(df_ori, target_name, True)
+
+        print('Training cv.')
         clf = MLPClassifier(activation='relu',
                             solver='adam', alpha=1e-5,
                             hidden_layer_sizes=(5, 2), random_state=1)
@@ -137,16 +176,25 @@ def main():
         print('Accuracy: {}'.format(accuracy_score(target, y_pred)))
         eval_clf_model(target, y_pred)
 
-        print('Training bayesian rule lists as mimic model.')
-        brl = RuleListClassifier(class1label=target_name,
-                                 verbose=False)
-        y_train = [x[1] for x in clf.predict_proba(df)]
-        y_pred = cross_val_predict(brl, df.as_matrix(), y_train, cv=5)
-        print(brl)
-        eval_clf_model(target, y_pred)
-        brl.fit(df.as_matrix(), y_train,
-                feature_labels=df.columns)
-        print(brl)
+        print('Training train/test split.')
+        y_pred = [0]
+        while len([x for x in y_pred if x == 1.0]) < 1:
+            X_train, X_test, y_train, y_test = train_test_split(df, target,
+                                                                test_size=.3,
+                                                                stratify=target)
+            clf.fit(X_train, y_train)
+            y_pred = clf.predict(X_test)
+        eval_clf_model(y_test, y_pred)
+        y_pred = [x[1] for x in clf.predict_proba(X_test)]
+        plot_roc(y_test, y_pred, target_name, 'MLPClassifier')
+
+        print('Training bayesian ridge regression as mimic model.')
+        y_train = [x[1] for x in clf.predict_proba(X_train)]
+        bayes = BayesianRidge()
+        y_pred = bayes.fit(X_train, y_train).predict(X_test)
+        print(zip(bayes.coef_, df.columns))
+        eval_reg_model(y_test, y_pred)
+        plot_roc(y_test, y_pred, target_name, 'BayesianRidge')
 
 
 if __name__ == '__main__':

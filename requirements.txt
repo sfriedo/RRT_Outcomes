@@ -5,3 +5,4 @@ knnimpute
 future==0.16.0
 fim
 scipy
+matplotlib
