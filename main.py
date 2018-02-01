@@ -143,7 +143,7 @@ def plot_roc(y_test, y_score, target_name, clf_name):
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title('ROC curve for MLPClassifier predicting STAY_DAYS_LESS_SEVEN')
+    plt.title('ROC curve for {} predicting {}'.format(clf_name, target_name))
     plt.legend(loc='lower right')
     if not exists(PLOT_DIR):
         makedirs(PLOT_DIR)
@@ -164,7 +164,7 @@ def plot_most_important_reg_features(coefs, target_name, num_feats=5):
 
 
 def main():
-    logging.basicConfig(filename='logfile.log', level=logging.INFO)
+    logging.basicConfig(filename='logfile2.log', level=logging.INFO)
     df_ori = get_data()
 
     for target_name in TARGET_ATTRIBUTES:
@@ -205,10 +205,12 @@ def main():
         plot_roc(y_test, y_pred, target_name, 'MLPClassifier')
 
         logging.info('Training BRL on train/test split.')
-        brl.fit(X_train.as_matrix(), y_train.as_matrix())
+        brl.fit(X_train.as_matrix(), y_train.as_matrix(),
+                feature_labels=df.columns)
         y_pred = brl.predict(X_test.as_matrix())
         eval_clf_model(y_test, y_pred)
         y_pred = [x[1] for x in brl.predict_proba(X_test.as_matrix())]
+        logging.info(str(brl))
         plot_roc(y_test, y_pred, target_name, 'BRL')
 
         logging.info('Training bayesian ridge regression as mimic model.')
