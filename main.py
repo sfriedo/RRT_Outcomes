@@ -131,23 +131,25 @@ def most_informative_feature_for_binary_classification(feature_names,
         logging.info(class_labels[0], coef, feat)
 
 
-def plot_roc(y_test, y_score, target_name, clf_name):
-    fpr, tpr, _ = roc_curve(y_test, y_score)
-    roc_auc = auc(fpr, tpr)
-
+def plot_rocs(roc_data, target_name):
     plt.figure()
-    plt.plot(fpr, tpr, color='darkorange', label='ROC curve (area = {:.2f})'
-             .format(roc_auc))
     plt.plot([0, 1], [0, 1], color='navy', linestyle='--')
+
+    for clf_name, data in roc_data.items():
+        y_test, y_score = data
+        fpr, tpr, _ = roc_curve(y_test, y_score)
+        roc_auc = auc(fpr, tpr)
+        plt.plot(fpr, tpr, label='{} (area = {:.2f})'
+                 .format(clf_name, roc_auc))
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title('ROC curve for {} predicting {}'.format(clf_name, target_name))
+    plt.title('ROC curve for prediction of {}'.format(target_name))
     plt.legend(loc='lower right')
     if not exists(PLOT_DIR):
         makedirs(PLOT_DIR)
-    plt.savefig(PLOT_DIR + 'ROC_{}_{}'.format(target_name, clf_name))
+    plt.savefig(PLOT_DIR + 'ROC_{}'.format(target_name))
     plt.clf()
 
 
@@ -202,7 +204,8 @@ def main():
             y_pred = clf.predict(X_test)
         eval_clf_model(y_test, y_pred)
         y_pred = [x[1] for x in clf.predict_proba(X_test)]
-        plot_roc(y_test, y_pred, target_name, 'MLPClassifier')
+        roc_data = {}
+        roc_data['MLPClassifier'] = (y_test, y_pred)
 
         logging.info('Training BRL on train/test split.')
         brl.fit(X_train.as_matrix(), y_train.as_matrix(),
@@ -211,7 +214,7 @@ def main():
         eval_clf_model(y_test, y_pred)
         y_pred = [x[1] for x in brl.predict_proba(X_test.as_matrix())]
         logging.info(str(brl))
-        plot_roc(y_test, y_pred, target_name, 'BRL')
+        roc_data['BRL'] = (y_test, y_pred)
 
         logging.info('Training bayesian ridge regression as mimic model.')
         y_train = [x[1] for x in clf.predict_proba(X_train)]
@@ -221,7 +224,8 @@ def main():
         eval_reg_model(y_test, y_pred)
         plot_most_important_reg_features(zip(bayes.coef_, df.columns),
                                          target_name)
-        plot_roc(y_test, y_pred, target_name, 'BayesianRidge')
+        roc_data['BayesianRidge'] = (y_test, y_pred)
+        plot_rocs(roc_data, target_name)
 
 
 if __name__ == '__main__':
