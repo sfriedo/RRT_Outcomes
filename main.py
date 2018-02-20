@@ -1,7 +1,7 @@
 #!python2
 from __future__ import division
 from hanaconnection import HanaConnection
-from sklearn.neural_network import MLPClassifier
+from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.linear_model import BayesianRidge
 from sklearn import preprocessing
 from sklearn.model_selection import cross_val_predict, train_test_split
@@ -53,9 +53,9 @@ BOOL_ATTRIBUTES = ['DIED_90DAYS', 'ELIXHAUSER_VANWALRAVEN',
                    'COAGULOPATHY', 'OBESITY', 'WEIGHT_LOSS',
                    'FLUID_ELECTROLYTE', 'BLOOD_LOSS_ANEMIA',
                    'DEFICIENCY_ANEMIAS', 'ALCOHOL_ABUSE', 'DRUG_ABUSE',
-                   'PSYCHOSES', 'DEPRESSION']
-TARGET_ATTRIBUTES = ['DIED_90DAYS', 'STAY_DAYS_LESS_SEVEN',
-                     'VENT_DAYS_LESS_SEVEN']
+                   'PSYCHOSES', 'DEPRESSION', 'STAY_DAYS_LESS_SEVEN',
+                   'VENT_DAYS_LESS_SEVEN']
+TARGET_ATTRIBUTES = ['STAY_DAYS', 'VENT_FREE_DAYS']
 PLOT_DIR = 'results/'
 
 
@@ -85,10 +85,11 @@ def process_data(df, target_name, scale=True):
         df[column] = df[column].fillna('null')
         le.fit(df[column])
         df[column] = le.transform(df[column])
-    df['STAY_DAYS_LESS_SEVEN'] = np.where(df['STAY_DAYS'] < 7, 1, 0)
-    df = df.drop('STAY_DAYS', axis=1)
-    df['VENT_DAYS_LESS_SEVEN'] = np.where(df['VENT_FREE_DAYS'] < 7, 1, 0)
-    df = df.drop('VENT_FREE_DAYS', axis=1)
+    if target_name in BOOL_ATTRIBUTES:
+        df['STAY_DAYS_LESS_SEVEN'] = np.where(df['STAY_DAYS'] < 7, 1, 0)
+        df = df.drop('STAY_DAYS', axis=1)
+        df['VENT_DAYS_LESS_SEVEN'] = np.where(df['VENT_FREE_DAYS'] < 7, 1, 0)
+        df = df.drop('VENT_FREE_DAYS', axis=1)
     # Impute missing values
     logging.info('Imputing missing data.')
     df[:] = knn_impute_few_observed(df.as_matrix(),
@@ -165,67 +166,124 @@ def plot_most_important_reg_features(coefs, target_name, num_feats=5):
     plt.clf()
 
 
+def train_bool(target_name, df_ori):
+    logging.info('Training classifier for {}'.format(target_name))
+
+    logging.info('Training bayesian rule lists.')
+    df, target = process_data(df_ori, target_name, False)
+    logging.info('Training cv.')
+    brl = RuleListClassifier(class1label=target_name,
+                             verbose=False)
+    y_pred = cross_val_predict(brl, df.as_matrix(), target.as_matrix(),
+                               cv=5)
+    logging.info('Accuracy: {}'.format(accuracy_score(target, y_pred)))
+    eval_clf_model(target, y_pred)
+
+    logging.info('Training neural network.')
+    df, target = process_data(df_ori, target_name, True)
+
+    logging.info('Training cv.')
+    clf = MLPClassifier(activation='relu',
+                        solver='adam', alpha=1e-5,
+                        hidden_layer_sizes=(5, 2))
+    y_pred = cross_val_predict(clf, df, target, cv=5)
+    logging.info('Accuracy: {}'.format(accuracy_score(target, y_pred)))
+    eval_clf_model(target, y_pred)
+
+    logging.info('Training MLP on train/test split.')
+    y_pred = [0]
+    while len([x for x in y_pred if x == 1.0]) < 1:
+        X_train, X_test, \
+            y_train, y_test = train_test_split(df, target,
+                                               test_size=.3,
+                                               stratify=target)
+        clf.fit(X_train, y_train)
+        y_pred = clf.predict(X_test)
+    eval_clf_model(y_test, y_pred)
+    y_pred = [x[1] for x in clf.predict_proba(X_test)]
+    roc_data = {}
+    roc_data['MLPClassifier'] = (y_test, y_pred)
+
+    logging.info('Training BRL on train/test split.')
+    brl.fit(X_train.as_matrix(), y_train.as_matrix(),
+            feature_labels=df.columns)
+    y_pred = brl.predict(X_test.as_matrix())
+    eval_clf_model(y_test, y_pred)
+    y_pred = [x[1] for x in brl.predict_proba(X_test.as_matrix())]
+    logging.info(str(brl))
+    roc_data['BRL'] = (y_test, y_pred)
+
+    logging.info('Training bayesian ridge regression on normal data.')
+    bayes = BayesianRidge()
+    y_pred = bayes.fit(X_train, y_train).predict(X_test)
+    logging.info(zip(bayes.coef_, df.columns))
+    eval_reg_model(y_test, y_pred)
+    plot_most_important_reg_features(zip(bayes.coef_, df.columns),
+                                     target_name)
+
+    logging.info('Training bayesian ridge regression as mimic model.')
+    y_train = [x[1] for x in clf.predict_proba(X_train)]
+    bayes = BayesianRidge()
+    y_pred = bayes.fit(X_train, y_train).predict(X_test)
+    logging.info(zip(bayes.coef_, df.columns))
+    eval_reg_model(y_test, y_pred)
+    plot_most_important_reg_features(zip(bayes.coef_, df.columns),
+                                     target_name)
+    roc_data['BayesianRidge'] = (y_test, y_pred)
+    plot_rocs(roc_data, target_name)
+
+
+def train_reg(target_name, df_ori):
+    logging.info('Training regression for {}'.format(target_name))
+
+    logging.info('Training neural network.')
+    df, target = process_data(df_ori, target_name, True)
+
+    logging.info('Training cv.')
+    clf = MLPRegressor(activation='relu',
+                       solver='adam', alpha=1e-5,
+                       hidden_layer_sizes=(5, 2))
+    y_pred = cross_val_predict(clf, df, target, cv=10)
+    eval_reg_model(target, y_pred)
+
+    logging.info('Training MLP on train/test split.')
+    y_pred = [0, 0]
+    while y_pred[1] == y_pred[0]:
+        X_train, X_test, \
+            y_train, y_test = train_test_split(df, target,
+                                               test_size=.3)
+        clf.fit(X_train, y_train)
+        y_pred = clf.predict(X_test)
+    eval_reg_model(y_test, y_pred)
+
+    logging.info('Training bayesian ridge regression on normal data.')
+    bayes = BayesianRidge()
+    y_pred = bayes.fit(X_train, y_train).predict(X_test)
+    logging.info(zip(bayes.coef_, df.columns))
+    eval_reg_model(y_test, y_pred)
+    plot_most_important_reg_features(zip(bayes.coef_, df.columns),
+                                     target_name)
+
+    logging.info('Training bayesian ridge regression as mimic model.')
+    y_train = clf.predict(X_train)
+    bayes = BayesianRidge()
+    y_pred = bayes.fit(X_train, y_train).predict(X_test)
+    logging.info(zip(bayes.coef_, df.columns))
+    eval_reg_model(y_test, y_pred)
+    plot_most_important_reg_features(zip(bayes.coef_, df.columns),
+                                     target_name + '_MIMIC')
+
+
 def main():
-    logging.basicConfig(filename='logfile2.log', level=logging.INFO)
+    logging.basicConfig(filename='logfile2.log', level=logging.INFO,
+                        filemode='w')
     df_ori = get_data()
 
     for target_name in TARGET_ATTRIBUTES:
-        logging.info('Training for {}'.format(target_name))
-
-        logging.info('Training bayesian rule lists.')
-        df, target = process_data(df_ori, target_name, False)
-        logging.info('Training cv.')
-        brl = RuleListClassifier(class1label=target_name,
-                                 verbose=False)
-        y_pred = cross_val_predict(brl, df.as_matrix(), target.as_matrix(),
-                                   cv=5)
-        logging.info('Accuracy: {}'.format(accuracy_score(target, y_pred)))
-        eval_clf_model(target, y_pred)
-
-        logging.info('Training neural network.')
-        df, target = process_data(df_ori, target_name, True)
-
-        logging.info('Training cv.')
-        clf = MLPClassifier(activation='relu',
-                            solver='adam', alpha=1e-5,
-                            hidden_layer_sizes=(5, 2), random_state=1)
-        y_pred = cross_val_predict(clf, df, target, cv=5)
-        logging.info('Accuracy: {}'.format(accuracy_score(target, y_pred)))
-        eval_clf_model(target, y_pred)
-
-        logging.info('Training MLP on train/test split.')
-        y_pred = [0]
-        while len([x for x in y_pred if x == 1.0]) < 1:
-            X_train, X_test, \
-                y_train, y_test = train_test_split(df, target,
-                                                   test_size=.3,
-                                                   stratify=target)
-            clf.fit(X_train, y_train)
-            y_pred = clf.predict(X_test)
-        eval_clf_model(y_test, y_pred)
-        y_pred = [x[1] for x in clf.predict_proba(X_test)]
-        roc_data = {}
-        roc_data['MLPClassifier'] = (y_test, y_pred)
-
-        logging.info('Training BRL on train/test split.')
-        brl.fit(X_train.as_matrix(), y_train.as_matrix(),
-                feature_labels=df.columns)
-        y_pred = brl.predict(X_test.as_matrix())
-        eval_clf_model(y_test, y_pred)
-        y_pred = [x[1] for x in brl.predict_proba(X_test.as_matrix())]
-        logging.info(str(brl))
-        roc_data['BRL'] = (y_test, y_pred)
-
-        logging.info('Training bayesian ridge regression as mimic model.')
-        y_train = [x[1] for x in clf.predict_proba(X_train)]
-        bayes = BayesianRidge()
-        y_pred = bayes.fit(X_train, y_train).predict(X_test)
-        logging.info(zip(bayes.coef_, df.columns))
-        eval_reg_model(y_test, y_pred)
-        plot_most_important_reg_features(zip(bayes.coef_, df.columns),
-                                         target_name)
-        roc_data['BayesianRidge'] = (y_test, y_pred)
-        plot_rocs(roc_data, target_name)
+        if target_name in BOOL_ATTRIBUTES:
+            train_bool(target_name, df_ori)
+        else:
+            train_reg(target_name, df_ori)
 
 
 if __name__ == '__main__':
